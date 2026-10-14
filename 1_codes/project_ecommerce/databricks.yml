@@ -1,0 +1,80 @@
+# Databricks Asset Bundle: deploys the ecommerce ETL notebooks and the scheduled job.
+#   databricks bundle validate -t dev
+#   databricks bundle deploy   -t dev
+#   databricks bundle run ecommerce_etl -t dev
+bundle:
+  name: ecommerce_etl
+
+resources:
+  jobs:
+    ecommerce_etl:
+      name: ecommerce_etl
+      max_concurrent_runs: 1
+
+      # Daily at 06:00 IST. To run whenever a new file lands instead, replace `schedule` with:
+      # trigger:
+      #   file_arrival:
+      #     url: /Volumes/ecommerce/source_data/raw/order_items/landing/
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: Asia/Kolkata
+        pause_status: UNPAUSED
+
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+
+      # No cluster settings on the tasks: they run on serverless jobs compute.
+      tasks:
+        - task_key: setup_catalog
+          notebook_task:
+            notebook_path: ./1_setup/setup_catalog.ipynb
+
+        # Dimensions: full snapshot reload
+        - task_key: dim_bronze
+          depends_on: [{ task_key: setup_catalog }]
+          notebook_task:
+            notebook_path: ./2_medallion_processing_dim/1_dim_bronze.ipynb
+        - task_key: dim_silver
+          depends_on: [{ task_key: dim_bronze }]
+          notebook_task:
+            notebook_path: ./2_medallion_processing_dim/2_dim_silver.ipynb
+        - task_key: dim_gold
+          depends_on: [{ task_key: dim_silver }]
+          notebook_task:
+            notebook_path: ./2_medallion_processing_dim/3_dim_gold.ipynb
+
+        # Facts: incremental bronze (Auto Loader), silver/gold rebuilt from bronze
+        - task_key: fact_bronze
+          depends_on: [{ task_key: setup_catalog }]
+          max_retries: 1
+          notebook_task:
+            notebook_path: ./3_medallion_processing_fact/1_fact_bronze.ipynb
+        - task_key: fact_silver
+          depends_on: [{ task_key: fact_bronze }]
+          notebook_task:
+            notebook_path: ./3_medallion_processing_fact/2_fact_silver.ipynb
+        - task_key: fact_gold
+          depends_on: [{ task_key: fact_silver }]
+          notebook_task:
+            notebook_path: ./3_medallion_processing_fact/3_fact_gold.ipynb
+
+        # Serving view needs both gold dims and gold fact
+        - task_key: create_views
+          depends_on: [{ task_key: dim_gold }, { task_key: fact_gold }]
+          notebook_task:
+            notebook_path: ./4_serving/1_create_views.ipynb
+
+targets:
+  # Development mode prefixes the job name with [dev <user>] and pauses the schedule.
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://<your-workspace-host>
+
+  prod:
+    mode: production
+    workspace:
+      host: https://<your-workspace-host>
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}

@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Databricks Asset Bundle local state / CLI config
+.databricks/
+.databrickscfg
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Editors
+.vscode/
+.idea/
+
+# Secrets
+.env
+*.pem
